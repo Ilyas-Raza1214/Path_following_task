@@ -1,20 +1,12 @@
 #include "PathFollower.hpp"
-
-#include <algorithm>
-#include <chrono>
 #include <cstdio>
-#include <cstdlib>
 #include <Eigen/Geometry>
-#include <fstream>
 #include <iostream>
-#include <limits>
-#include <vector>
 
 Path getPath()
 {
     std::vector<Eigen::Isometry2d> cp;
     cp.reserve(112);
-
     cp.emplace_back(Eigen::Translation2d(0.343997, 0.942623) * Eigen::Rotation2Dd(-1.43288));
     cp.emplace_back(Eigen::Translation2d(0.352861, 0.947252) * Eigen::Rotation2Dd(-1.43288));
     cp.emplace_back(Eigen::Translation2d(0.361725, 0.951881) * Eigen::Rotation2Dd(-1.43219));
@@ -128,103 +120,8 @@ Path getPath()
     cp.emplace_back(Eigen::Translation2d(1.38962, 1.195) * Eigen::Rotation2Dd(1.5708));
     cp.emplace_back(Eigen::Translation2d(1.394, 1.195) * Eigen::Rotation2Dd(1.5708));
 
-    return Path{std::move(cp)};
-}
-
-void writeSvgPlot(const Path& desiredPath,
-                  const std::vector<Eigen::Isometry2d>& followedPath)
-{
-    const int width = 900;
-    const int height = 700;
-    const int margin = 60;
-
-    if (desiredPath.poses.empty() && followedPath.empty())
-    {
-        return;
-    }
-
-    double minX = std::numeric_limits<double>::infinity();
-    double maxX = -std::numeric_limits<double>::infinity();
-    double minY = std::numeric_limits<double>::infinity();
-    double maxY = -std::numeric_limits<double>::infinity();
-
-    auto updateBounds = [&](const Eigen::Isometry2d& pose) {
-        const double x = pose.translation().x();
-        const double y = pose.translation().y();
-
-        minX = std::min(minX, x);
-        maxX = std::max(maxX, x);
-        minY = std::min(minY, y);
-        maxY = std::max(maxY, y);
-    };
-
-    for (const auto& pose : desiredPath.poses)
-    {
-        updateBounds(pose);
-    }
-
-    for (const auto& pose : followedPath)
-    {
-        updateBounds(pose);
-    }
-
-    const double rangeX = std::max(maxX - minX, 1e-9);
-    const double rangeY = std::max(maxY - minY, 1e-9);
-
-    const double plotWidth = width - 2.0 * margin;
-    const double plotHeight = height - 2.0 * margin;
-
-    const double scale = std::min(plotWidth / rangeX, plotHeight / rangeY);
-
-    const double centerX = 0.5 * (minX + maxX);
-    const double centerY = 0.5 * (minY + maxY);
-
-    auto mapX = [&](double x) {
-        return width / 2.0 + (x - centerX) * scale;
-    };
-
-    auto mapY = [&](double y) {
-        return height / 2.0 - (y - centerY) * scale;
-    };
-
-    std::ofstream file("path_plot.svg");
-
-    file << "<svg xmlns=\"http://www.w3.org/2000/svg\" "
-         << "width=\"" << width << "\" height=\"" << height << "\">\n";
-
-    file << "<rect width=\"100%\" height=\"100%\" fill=\"white\"/>\n";
-
-    file << "<text x=\"40\" y=\"35\" font-size=\"22\" "
-         << "font-family=\"Arial\">Path Follower Result</text>\n";
-
-    file << "<text x=\"40\" y=\"65\" font-size=\"15\" "
-         << "font-family=\"Arial\" fill=\"blue\">Blue: desired path</text>\n";
-
-    file << "<text x=\"230\" y=\"65\" font-size=\"15\" "
-         << "font-family=\"Arial\" fill=\"red\">Red: followed path</text>\n";
-
-    file << "<rect x=\"" << margin << "\" y=\"" << margin << "\" "
-         << "width=\"" << plotWidth << "\" height=\"" << plotHeight << "\" "
-         << "fill=\"none\" stroke=\"lightgray\" stroke-width=\"1\"/>\n";
-
-    file << "<polyline fill=\"none\" stroke=\"blue\" stroke-width=\"3\" points=\"";
-    for (const auto& pose : desiredPath.poses)
-    {
-        file << mapX(pose.translation().x()) << ","
-             << mapY(pose.translation().y()) << " ";
-    }
-    file << "\"/>\n";
-
-    file << "<polyline fill=\"none\" stroke=\"red\" stroke-width=\"2\" points=\"";
-    for (const auto& pose : followedPath)
-    {
-        file << mapX(pose.translation().x()) << ","
-             << mapY(pose.translation().y()) << " ";
-    }
-    file << "\"/>\n";
-
-    file << "</svg>\n";
-}
+    return Path{.poses = std::move(cp)};
+};
 
 int main()
 {
@@ -234,8 +131,7 @@ int main()
 
     size_t maxIterations = 10000;
 
-    std::chrono::time_point<std::chrono::system_clock> curTime =
-        std::chrono::system_clock::now();
+    std::chrono::time_point<std::chrono::system_clock> curTime = std::chrono::system_clock::now();
 
     Eigen::Isometry2d curPose(path.poses.front());
 
@@ -243,28 +139,21 @@ int main()
 
     const double accuracy = 1e-4;
 
-    auto computePoseInDt = [](std::chrono::milliseconds dt,
-                              const Eigen::Isometry2d& curPose,
+    auto computePoseInDt = [](std::chrono::milliseconds dt, const Eigen::Isometry2d& curPose,
                               const Twist2d& cmd) -> Eigen::Isometry2d {
         Eigen::Isometry2d ret(curPose);
 
-        const double dTsec =
-            std::chrono::duration_cast<std::chrono::duration<double>>(dt).count();
+        double dTsec = std::chrono::duration_cast<std::chrono::duration<double>>(dt).count();
 
-        // Compute next pose from the command assuming perfect execution.
-        // This is correct because cmd.tv is expressed in global frame.
+        // compute next position from the cmd assuming perfect execution
+        // note, this is correct, as the cmd is in global frame
         ret.translation() += cmd.tv * dTsec;
         ret.rotate(cmd.rv * dTsec);
 
         return ret;
     };
 
-    Twist2d curCmd{0.0, Eigen::Vector2d::Zero()};
-
-    std::vector<Eigen::Isometry2d> followedPath;
-    followedPath.push_back(curPose);
-
-    bool reachedEnd = false;
+    Twist2d curCmd{.rv = 0, .tv = Eigen::Vector2d::Zero()};
 
     for (size_t i = 0; i < maxIterations; i++)
     {
@@ -276,28 +165,16 @@ int main()
         curPose = computePoseInDt(std::chrono::milliseconds(5), curPose, curCmd);
         curCmd = pf.computeNextCmd(curTime);
 
-        followedPath.push_back(curPose);
-
         const Eigen::Isometry2d diffToEnd(world2End * curPose);
 
         if ((diffToEnd.translation().squaredNorm() < accuracy * accuracy) &&
             (Eigen::Rotation2Dd(diffToEnd.rotation()).angle() < accuracy))
         {
             std::cout << "Reached end of path" << std::endl;
-            reachedEnd = true;
             break;
         }
     }
 
-    if (!reachedEnd)
-    {
-        std::cout << "Simulation finished, but end pose was not reached exactly."
-                  << std::endl;
-    }
-
-    writeSvgPlot(path, followedPath);
-
-    std::cout << "SVG plot created: path_plot.svg" << std::endl;
-
     return EXIT_SUCCESS;
 }
+
